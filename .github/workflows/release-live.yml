@@ -14,6 +14,10 @@ concurrency:
   group: nugged-live-release
   cancel-in-progress: false
 
+env:
+  RELEASE_PLUGIN_ID: vault-nickname-nugged
+  RELEASE_PLUGIN_NAME: Vault Nickname (nugged)
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -49,32 +53,44 @@ jobs:
           set -euo pipefail
 
           rm -rf dist
-          mkdir -p dist/vault-nickname
+          mkdir -p "dist/$RELEASE_PLUGIN_ID"
           cp main.js dist/main.js
 
-          VERSION="$VERSION" node <<'NODE'
+          VERSION="$VERSION" \
+          PLUGIN_ID="$RELEASE_PLUGIN_ID" \
+          PLUGIN_NAME="$RELEASE_PLUGIN_NAME" \
+          node <<'NODE'
           const fs = require('fs');
           const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          manifest.id = process.env.PLUGIN_ID;
+          manifest.name = process.env.PLUGIN_NAME;
           manifest.version = process.env.VERSION;
           fs.writeFileSync('dist/manifest.json', JSON.stringify(manifest, null, 4) + '\n');
           NODE
 
-          cp dist/main.js dist/vault-nickname/main.js
-          cp dist/manifest.json dist/vault-nickname/manifest.json
+          cp dist/main.js "dist/$RELEASE_PLUGIN_ID/main.js"
+          cp dist/manifest.json "dist/$RELEASE_PLUGIN_ID/manifest.json"
 
           if [[ -f styles.css ]]; then
             cp styles.css dist/styles.css
-            cp styles.css dist/vault-nickname/styles.css
+            cp styles.css "dist/$RELEASE_PLUGIN_ID/styles.css"
           fi
 
-          jq -e --arg version "$VERSION" \
-            '.id == "vault-nickname" and .version == $version' \
+          jq -e \
+            --arg id "$RELEASE_PLUGIN_ID" \
+            --arg name "$RELEASE_PLUGIN_NAME" \
+            --arg version "$VERSION" \
+            '.id == $id and .name == $name and .version == $version' \
             dist/manifest.json >/dev/null
 
           (
             cd dist
-            zip -qr "vault-nickname-${VERSION}.zip" vault-nickname
-            sha256sum main.js manifest.json "vault-nickname-${VERSION}.zip" > SHA256SUMS
+            zip -qr "${RELEASE_PLUGIN_ID}-${VERSION}.zip" "$RELEASE_PLUGIN_ID"
+            sha256sum \
+              main.js \
+              manifest.json \
+              "${RELEASE_PLUGIN_ID}-${VERSION}.zip" \
+              > SHA256SUMS
             if [[ -f styles.css ]]; then
               sha256sum styles.css >> SHA256SUMS
             fi
@@ -97,6 +113,7 @@ jobs:
           Personal prerelease built automatically from \`nugged/live\`.
 
           Source commit: \`${GITHUB_SHA}\`
+          Plugin id: \`${RELEASE_PLUGIN_ID}\` (intentionally distinct from upstream \`vault-nickname\`, so Obsidian's native updater does not associate this personal build with upstream releases).
 
           Includes the configurable nickname-storage work from upstream PR #9 plus the already-open-vault switcher fix adapted from davidvkimball/obsidian-vault-nickname@4934b18395ae62ea7d5e0a023c3f7fbe9accb29c.
 
@@ -107,7 +124,7 @@ jobs:
             dist/main.js
             dist/manifest.json
             dist/SHA256SUMS
-            "dist/vault-nickname-${VERSION}.zip"
+            "dist/${RELEASE_PLUGIN_ID}-${VERSION}.zip"
           )
           if [[ -f dist/styles.css ]]; then
             assets+=(dist/styles.css)
