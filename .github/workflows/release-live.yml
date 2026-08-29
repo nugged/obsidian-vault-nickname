@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - nugged/live
-      - release/live-prerelease-setup
     paths:
       - .github/live-release-version
 
@@ -81,18 +80,7 @@ jobs:
             fi
           )
 
-      - name: Verify setup branch only
-        if: github.ref == 'refs/heads/release/live-prerelease-setup'
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          set -euo pipefail
-          echo "Validated release package ${VERSION} from ${GITHUB_SHA}; no release published from setup branch."
-          ls -lh dist
-
       - name: Publish GitHub prerelease
-        if: github.ref == 'refs/heads/nugged/live'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
