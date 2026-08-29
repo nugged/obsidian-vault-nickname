@@ -1,0 +1,134 @@
+name: Build and release nugged/live
+
+on:
+  push:
+    branches:
+      - nugged/live
+      - release/live-prerelease-setup
+    paths:
+      - .github/live-release-version
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nugged-live-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - name: Read release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < .github/live-release-version)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build production bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-package-lock
+          node esbuild.config.mjs production
+          test -s main.js
+
+      - name: Package release files
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+
+          rm -rf dist
+          mkdir -p dist/vault-nickname
+          cp main.js dist/main.js
+
+          VERSION="$VERSION" node <<'NODE'
+          const fs = require('fs');
+          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          manifest.version = process.env.VERSION;
+          fs.writeFileSync('dist/manifest.json', JSON.stringify(manifest, null, 4) + '\n');
+          NODE
+
+          cp dist/main.js dist/vault-nickname/main.js
+          cp dist/manifest.json dist/vault-nickname/manifest.json
+
+          if [[ -f styles.css ]]; then
+            cp styles.css dist/styles.css
+            cp styles.css dist/vault-nickname/styles.css
+          fi
+
+          jq -e --arg version "$VERSION" \
+            '.id == "vault-nickname" and .version == $version' \
+            dist/manifest.json >/dev/null
+
+          (
+            cd dist
+            zip -qr "vault-nickname-${VERSION}.zip" vault-nickname
+            sha256sum main.js manifest.json "vault-nickname-${VERSION}.zip" > SHA256SUMS
+            if [[ -f styles.css ]]; then
+              sha256sum styles.css >> SHA256SUMS
+            fi
+          )
+
+      - name: Verify setup branch only
+        if: github.ref == 'refs/heads/release/live-prerelease-setup'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          echo "Validated release package ${VERSION} from ${GITHUB_SHA}; no release published from setup branch."
+          ls -lh dist
+
+      - name: Publish GitHub prerelease
+        if: github.ref == 'refs/heads/nugged/live'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+
+          cat > /tmp/release-notes.md <<EOF
+          Personal prerelease built automatically from \`nugged/live\`.
+
+          Source commit: \`${GITHUB_SHA}\`
+
+          Includes the configurable nickname-storage work from upstream PR #9 plus the already-open-vault switcher fix adapted from davidvkimball/obsidian-vault-nickname@4934b18395ae62ea7d5e0a023c3f7fbe9accb29c.
+
+          Install manually from the attached files/ZIP, or add \`nugged/obsidian-vault-nickname\` to BRAT.
+          EOF
+
+          assets=(
+            dist/main.js
+            dist/manifest.json
+            dist/SHA256SUMS
+            "dist/vault-nickname-${VERSION}.zip"
+          )
+          if [[ -f dist/styles.css ]]; then
+            assets+=(dist/styles.css)
+          fi
+
+          gh release create "$VERSION" \
+            "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --prerelease \
+            --notes-file /tmp/release-notes.md
